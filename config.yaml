@@ -1,0 +1,9 @@
+data:
+  path: data/aclImdb
+  validation_ratio: 0.10
+  train_sizes:
+    - 1000
+    - 5000
+    - 10000
+    - 22500
+  seed: 42
