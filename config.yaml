@@ -7,3 +7,11 @@ data:
     - 10000
     - 22500
   seed: 42
+token_analysis:
+  models:
+    modernbert: answerdotai/ModernBERT-base
+    deberta: microsoft/deberta-v3-base
+  thresholds:
+    - 512
+    - 1024
+    - 2048

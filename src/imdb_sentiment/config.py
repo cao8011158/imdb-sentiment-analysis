@@ -19,8 +19,13 @@ class DataConfig:
     seed: int
 
 
-def load_data_config(project_root: Path | None = None) -> DataConfig:
-    """Load config.yaml and resolve data.path against the project root."""
+@dataclass(frozen=True)
+class TokenAnalysisConfig:
+    models: dict[str, str]
+    thresholds: tuple[int, ...]
+
+
+def _read_config(project_root: Path | None) -> tuple[Path, dict]:
     root = (project_root or Path(__file__).resolve().parents[2]).resolve()
     config_file = root / "config.yaml"
     if not config_file.is_file():
@@ -31,7 +36,16 @@ def load_data_config(project_root: Path | None = None) -> DataConfig:
     except yaml.YAMLError as exc:
         raise ConfigError(f"Invalid YAML in {config_file}: {exc}") from exc
 
-    if not isinstance(config, dict) or not isinstance(config.get("data"), dict):
+    if not isinstance(config, dict):
+        raise ConfigError("config.yaml must contain a mapping")
+    return root, config
+
+
+def load_data_config(project_root: Path | None = None) -> DataConfig:
+    """Load config.yaml and resolve data.path against the project root."""
+    root, config = _read_config(project_root)
+
+    if not isinstance(config.get("data"), dict):
         raise ConfigError("config.yaml must contain a 'data' mapping")
     data = config["data"]
     required = ("path", "validation_ratio", "train_sizes", "seed")
@@ -65,3 +79,24 @@ def load_data_config(project_root: Path | None = None) -> DataConfig:
         raise ConfigError("data.seed must be an integer")
 
     return DataConfig(path, dataset_path, float(ratio), tuple(sizes), seed)
+
+
+def load_token_analysis_config(project_root: Path | None = None) -> TokenAnalysisConfig:
+    """Read candidate tokenizer names and reporting thresholds."""
+    _, config = _read_config(project_root)
+    analysis = config.get("token_analysis")
+    if not isinstance(analysis, dict):
+        raise ConfigError("config.yaml must contain a 'token_analysis' mapping")
+    models = analysis.get("models")
+    if (not isinstance(models, dict) or not models or
+            any(not isinstance(key, str) or not key.strip() or
+                not isinstance(value, str) or not value.strip()
+                for key, value in models.items())):
+        raise ConfigError("token_analysis.models must map names to nonempty model IDs")
+    thresholds = analysis.get("thresholds")
+    if (not isinstance(thresholds, list) or not thresholds or
+            any(isinstance(value, bool) or not isinstance(value, int) or value <= 0
+                for value in thresholds) or
+            thresholds != sorted(set(thresholds))):
+        raise ConfigError("token_analysis.thresholds must be increasing positive integers")
+    return TokenAnalysisConfig(dict(models), tuple(thresholds))
