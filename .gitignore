@@ -1,4 +1,7 @@
 .venv/
+.uv-cache/
+.hf-cache/
+.pytest-run-tmp/
 .pytest_cache/
 __pycache__/
 data/

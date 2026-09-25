@@ -15,3 +15,7 @@ token_analysis:
     - 512
     - 1024
     - 2048
+
+model:
+  name: answerdotai/ModernBERT-base
+  num_labels: 2

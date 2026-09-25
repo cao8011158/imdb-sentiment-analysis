@@ -25,6 +25,12 @@ class TokenAnalysisConfig:
     thresholds: tuple[int, ...]
 
 
+@dataclass(frozen=True)
+class ModelConfig:
+    name: str
+    num_labels: int
+
+
 def _read_config(project_root: Path | None) -> tuple[Path, dict]:
     root = (project_root or Path(__file__).resolve().parents[2]).resolve()
     config_file = root / "config.yaml"
@@ -100,3 +106,18 @@ def load_token_analysis_config(project_root: Path | None = None) -> TokenAnalysi
             thresholds != sorted(set(thresholds))):
         raise ConfigError("token_analysis.thresholds must be increasing positive integers")
     return TokenAnalysisConfig(dict(models), tuple(thresholds))
+
+
+def load_model_config(project_root: Path | None = None) -> ModelConfig:
+    """Read the selected sequence-classification model from config.yaml."""
+    _, config = _read_config(project_root)
+    model = config.get("model")
+    if not isinstance(model, dict):
+        raise ConfigError("config.yaml must contain a 'model' mapping")
+    name = model.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ConfigError("model.name must be a nonempty model ID")
+    num_labels = model.get("num_labels")
+    if isinstance(num_labels, bool) or not isinstance(num_labels, int) or num_labels <= 0:
+        raise ConfigError("model.num_labels must be a positive integer")
+    return ModelConfig(name, num_labels)
