@@ -62,7 +62,21 @@ procedure does not depend on the existing `uv.lock` file.
    !python tests/smoke_training.py single-batch --batch-size 32
    ```
 
-5. Check that the same 16 training reviews can be memorized, then check the
+5. Stress test the A100 at the full configured input length. `memory-batch`
+   forces the **actual input sequence length to 2048**, with every attention
+   mask position set to 1; it is a worst-case GPU memory stress test rather
+   than a test of typical IMDb batch lengths. It performs forward, loss,
+   backward, and one AdamW step with full fine-tuning and BF16. Run each size
+   in a separate command; an OOM exits with an error and never lowers the
+   batch size automatically.
+
+   ```python
+   !python tests/smoke_training.py memory-batch --batch-size 8
+   !python tests/smoke_training.py memory-batch --batch-size 16
+   !python tests/smoke_training.py memory-batch --batch-size 32
+   ```
+
+6. Check that the same 16 training reviews can be memorized, then check the
    full training flow on 200 training and 100 validation reviews for 2 epochs.
    The tiny overfit check uses training reviews only and a test-only learning
    rate; neither check evaluates the official test split.
@@ -72,12 +86,15 @@ procedure does not depend on the existing `uv.lock` file.
    !python tests/smoke_training.py e2e --batch-size 16 --accumulation-steps 2
    ```
 
-6. Choose the largest stable A100 micro batch. Keep the effective batch size
+7. Choose the largest stable A100 micro batch using the full-length memory
+   results. If batch 32 runs out of memory but 16 passes, use batch 16 with
+   accumulation 2. If 16 runs out of memory but 8 passes, use batch 8 with
+   accumulation 4. Keep the effective batch size
    at 32 by setting one explicit pair for **every** later run: `8 × 4`,
    `16 × 2`, or `32 × 1`. Change the two `training` values in `config.yaml`
    together, or pass both CLI flags as shown below.
 
-7. Run the learning-rate pilot using one training subset and the fixed 2,500
+8. Run the learning-rate pilot using one training subset and the fixed 2,500
    review validation split. The three rates come from `config.yaml`; the
    official test set is not evaluated. Change the batch/accumulation pair in
    the command if needed.
@@ -87,13 +104,13 @@ procedure does not depend on the existing `uv.lock` file.
    !cat results/lr_search.csv
    ```
 
-8. Inspect `results/lr_search.csv` and the pilot histories under
+9. Inspect `results/lr_search.csv` and the pilot histories under
    `results/training/lr_pilot/`. Select by best validation F1, then set the
    single `training.learning_rate` value in `config.yaml` to that rate.
    Leave it fixed for all four scaling runs. Training starts from the same
    pretrained checkpoint and seed on every run.
 
-9. Run the four formal experiments, keeping the same micro batch and
+10. Run the four formal experiments, keeping the same micro batch and
    accumulation flags in every command:
 
    ```python

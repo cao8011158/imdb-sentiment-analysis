@@ -1,4 +1,4 @@
-"""Run only on Colab CUDA: single step, tiny overfit, or small end-to-end."""
+"""Run only on Colab CUDA: training checks and worst-case memory stress."""
 
 import argparse
 import csv
@@ -75,6 +75,76 @@ def single_batch(reviews: tuple[Review, ...], batch_size: int) -> None:
           f"loss={output.loss.item():.4f}, logits={tuple(output.logits.shape)}")
 
 
+def memory_batch(batch_size: int) -> None:
+    """One full optimizer step with every attention-mask position occupied."""
+    config = load_training_config()
+    if config.max_length != 2048 or not config.bf16:
+        raise RuntimeError("memory-batch requires max_length=2048 and bf16=true")
+    device = _cuda_device(config.bf16)
+    set_seed(config.seed)
+    model_config = load_model_config()
+    tokenizer = load_tokenizer(model_config)
+    model = load_model(model_config).to(device).train()
+    if not all(parameter.requires_grad for parameter in model.parameters()):
+        raise RuntimeError("memory-batch requires full fine-tuning")
+
+    ordinary_ids = tokenizer.encode("movie", add_special_tokens=False)
+    ordinary_ids = [token_id for token_id in ordinary_ids
+                    if token_id not in tokenizer.all_special_ids]
+    if not ordinary_ids or tokenizer.cls_token_id is None or tokenizer.sep_token_id is None:
+        raise RuntimeError("Tokenizer did not provide required legal token IDs")
+    token_id = ordinary_ids[0]
+    sequence = [tokenizer.cls_token_id] + [token_id] * (config.max_length - 2)
+    sequence.append(tokenizer.sep_token_id)
+    vocabulary_size = model.get_input_embeddings().num_embeddings
+    if any(token_id < 0 or token_id >= vocabulary_size for token_id in sequence):
+        raise RuntimeError("Synthetic input contains a token ID outside model vocabulary")
+
+    batch = {
+        "input_ids": torch.tensor(sequence, dtype=torch.long).repeat(batch_size, 1),
+        "attention_mask": torch.ones((batch_size, config.max_length), dtype=torch.long),
+        "labels": torch.arange(batch_size, dtype=torch.long) % 2,
+    }
+    expected_shape = (batch_size, 2048)
+    if (batch["input_ids"].shape != expected_shape or
+            batch["attention_mask"].shape != expected_shape or
+            batch["labels"].shape != (batch_size,) or
+            not torch.all(batch["attention_mask"] == 1)):
+        raise AssertionError("Synthetic batch does not have the required full-length shape")
+
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay,
+    )
+    optimizer.zero_grad(set_to_none=True)
+    torch.cuda.synchronize(device)
+    torch.cuda.reset_peak_memory_stats(device)
+    try:
+        batch = {key: value.to(device) for key, value in batch.items()}
+        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):
+            output = model(**batch)
+        if output.logits.shape != (batch_size, model_config.num_labels):
+            raise AssertionError(f"Unexpected logits shape: {tuple(output.logits.shape)}")
+        if not torch.isfinite(output.loss):
+            raise AssertionError("memory-batch loss is NaN or Inf")
+        output.loss.backward()
+        optimizer.step()
+        torch.cuda.synchronize(device)
+    except torch.cuda.OutOfMemoryError:
+        print(f"memory-batch OOM: batch_size={batch_size}, sequence_length=2048", flush=True)
+        raise
+
+    bytes_per_gb = 1_000_000_000
+    print("memory-batch PASS")
+    print(f"batch_size={batch_size}")
+    print("sequence_length=2048")
+    print(f"input_ids_dtype={batch['input_ids'].dtype}, "
+          f"model_dtype={next(model.parameters()).dtype}, bf16_autocast=True")
+    print(f"loss={output.loss.item():.4f}")
+    print(f"peak_allocated_memory_GB={torch.cuda.max_memory_allocated(device) / bytes_per_gb:.3f}")
+    print(f"peak_reserved_memory_GB={torch.cuda.max_memory_reserved(device) / bytes_per_gb:.3f}")
+    print(f"gpu_name={torch.cuda.get_device_name(device)}")
+
+
 def tiny_overfit(reviews: tuple[Review, ...], steps: int, learning_rate: float) -> None:
     config = load_training_config()
     device = _cuda_device(config.bf16)
@@ -143,6 +213,8 @@ def main() -> None:
     commands = parser.add_subparsers(dest="command", required=True)
     one = commands.add_parser("single-batch")
     one.add_argument("--batch-size", type=int, choices=(8, 16, 32), required=True)
+    memory = commands.add_parser("memory-batch")
+    memory.add_argument("--batch-size", type=int, choices=(8, 16, 32), required=True)
     overfit = commands.add_parser("tiny-overfit")
     overfit.add_argument("--steps", type=int, default=100)
     overfit.add_argument("--learning-rate", type=float, default=1e-4)
@@ -150,6 +222,9 @@ def main() -> None:
     e2e.add_argument("--batch-size", type=int)
     e2e.add_argument("--accumulation-steps", type=int)
     options = parser.parse_args()
+    if options.command == "memory-batch":
+        memory_batch(options.batch_size)
+        return
     if options.command == "tiny-overfit" and (options.steps <= 0 or options.learning_rate <= 0):
         parser.error("--steps and --learning-rate must be positive")
     prepared = prepare_dataset(load_data_config())
