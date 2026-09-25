@@ -8,3 +8,4 @@ data/
 results/runs/
 results/training/
 results/lr_search.csv
+results/jev/

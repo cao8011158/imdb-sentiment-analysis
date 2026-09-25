@@ -138,3 +138,38 @@ the highest-F1 checkpoint, and only then evaluates the untouched official
 25,000-review test split. Existing run directories are protected against
 accidental overwrites. Later formal runs also reject changes to the selected
 learning rate, training settings, micro batch, or fixed validation IDs.
+
+## Jev evaluation
+
+Jev uses the existing IMDb split and sends each `Review.text` unchanged as the
+System One `state`. Set `TYPESAFE_API_KEY` in your environment before running
+these commands. The classification instructions and criteria are fixed in
+`jev_evaluation.py`; the official test results must not be used to revise them.
+
+Check API access and available models:
+
+```bash
+python -m imdb_sentiment.jev_evaluation models
+```
+
+Run a small request/response check on the **validation** split:
+
+```bash
+python -m imdb_sentiment.jev_evaluation smoke --model jev-latest --limit 10 --concurrency 4
+```
+
+Evaluate all 25,000 official test reviews:
+
+```bash
+python -m imdb_sentiment.jev_evaluation formal --model jev-latest --concurrency 8
+```
+
+Results are committed one review at a time to `results/jev/jev_results.sqlite`.
+Re-running the same `formal` command skips successful reviews and retries failed
+ones. A different requested model cannot reuse those sample results. Once all
+25,000 test predictions succeed, the command writes
+`results/jev/jev_predictions.csv` and `results/jev/jev_summary.json`. An
+incomplete run keeps partial SQLite/CSV results and exits with an error. The
+summary uses the same positive-class binary metrics as ModernBERT and records
+token usage and request latency without estimating dollar cost. The CSV does
+not contain review text or the API key.
