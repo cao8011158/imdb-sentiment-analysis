@@ -46,6 +46,7 @@ def test_loaders_use_config_and_label_mapping_without_download(monkeypatch) -> N
         "num_labels": config.num_labels,
         "id2label": {0: "NEGATIVE", 1: "POSITIVE"},
         "label2id": {"NEGATIVE": 0, "POSITIVE": 1},
+        "problem_type": "single_label_classification",
     })
     assert loaded.config.num_labels == 2
     assert loaded.config.id2label == {0: "NEGATIVE", 1: "POSITIVE"}

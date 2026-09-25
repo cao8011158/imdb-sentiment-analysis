@@ -28,6 +28,7 @@ def load_model(config: ModelConfig | None = None):
         num_labels=config.num_labels,
         id2label=ID2LABEL,
         label2id=LABEL2ID,
+        problem_type="single_label_classification",
     )
 
 

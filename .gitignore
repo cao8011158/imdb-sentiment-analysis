@@ -5,3 +5,6 @@
 .pytest_cache/
 __pycache__/
 data/
+results/runs/
+results/training/
+results/lr_search.csv

@@ -1,6 +1,7 @@
 """Read and validate the project's dataset configuration."""
 
 from dataclasses import dataclass
+from math import isfinite
 from pathlib import Path
 
 import yaml
@@ -29,6 +30,31 @@ class TokenAnalysisConfig:
 class ModelConfig:
     name: str
     num_labels: int
+
+
+@dataclass(frozen=True)
+class TrainingConfig:
+    max_length: int
+    per_device_train_batch_size: int
+    per_device_eval_batch_size: int
+    gradient_accumulation_steps: int
+    learning_rate: float
+    learning_rate_candidates: tuple[float, ...]
+    weight_decay: float
+    warmup_ratio: float
+    lr_scheduler_type: str
+    max_epochs: int
+    early_stopping_patience: int
+    early_stopping_threshold: float
+    metric_for_best_model: str
+    seed: int
+    bf16: bool
+    group_by_length: bool
+    save_total_limit: int
+
+    @property
+    def effective_batch_size(self) -> int:
+        return self.per_device_train_batch_size * self.gradient_accumulation_steps
 
 
 def _read_config(project_root: Path | None) -> tuple[Path, dict]:
@@ -121,3 +147,79 @@ def load_model_config(project_root: Path | None = None) -> ModelConfig:
     if isinstance(num_labels, bool) or not isinstance(num_labels, int) or num_labels <= 0:
         raise ConfigError("model.num_labels must be a positive integer")
     return ModelConfig(name, num_labels)
+
+
+def load_training_config(project_root: Path | None = None) -> TrainingConfig:
+    """Read training settings through the project's existing YAML reader."""
+    _, config = _read_config(project_root)
+    raw = config.get("training")
+    if not isinstance(raw, dict):
+        raise ConfigError("config.yaml must contain a 'training' mapping")
+    missing = [name for name in TrainingConfig.__dataclass_fields__ if name not in raw]
+    if missing:
+        raise ConfigError(f"Missing training configuration field(s): {', '.join(missing)}")
+
+    positive_ints = (
+        "max_length", "per_device_train_batch_size", "per_device_eval_batch_size",
+        "gradient_accumulation_steps", "max_epochs", "save_total_limit",
+    )
+    for name in positive_ints:
+        value = raw[name]
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ConfigError(f"training.{name} must be a positive integer")
+    patience = raw["early_stopping_patience"]
+    if isinstance(patience, bool) or not isinstance(patience, int) or patience < 0:
+        raise ConfigError("training.early_stopping_patience must be a nonnegative integer")
+    seed = raw["seed"]
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise ConfigError("training.seed must be an integer")
+
+    def finite_number(name: str, *, positive: bool = False) -> float:
+        value = raw[name]
+        if isinstance(value, bool):
+            raise ConfigError(f"training.{name} must be a finite number")
+        try:
+            number = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"training.{name} must be a finite number") from exc
+        if not isfinite(number) or number < 0 or (positive and number == 0):
+            qualifier = "positive" if positive else "nonnegative"
+            raise ConfigError(f"training.{name} must be a finite {qualifier} number")
+        return number
+
+    learning_rate = finite_number("learning_rate", positive=True)
+    rates = raw["learning_rate_candidates"]
+    if not isinstance(rates, list) or not rates:
+        raise ConfigError("training.learning_rate_candidates must be a nonempty list")
+    try:
+        candidates = tuple(float(rate) for rate in rates)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError("training.learning_rate_candidates must contain numbers") from exc
+    if (any(isinstance(rate, bool) for rate in rates) or
+            any(not isfinite(rate) or rate <= 0 for rate in candidates) or
+            len(candidates) != len(set(candidates))):
+        raise ConfigError("training.learning_rate_candidates must be unique positive numbers")
+
+    weight_decay = finite_number("weight_decay")
+    warmup_ratio = finite_number("warmup_ratio")
+    if warmup_ratio >= 1:
+        raise ConfigError("training.warmup_ratio must be less than 1")
+    threshold = finite_number("early_stopping_threshold")
+    if raw["lr_scheduler_type"] != "linear":
+        raise ConfigError("training.lr_scheduler_type must be 'linear'")
+    if not isinstance(raw["metric_for_best_model"], str) or not raw["metric_for_best_model"].strip():
+        raise ConfigError("training.metric_for_best_model must be a nonempty string")
+    if raw["metric_for_best_model"] != "f1":
+        raise ConfigError("training.metric_for_best_model must be 'f1' for this binary task")
+    for name in ("bf16", "group_by_length"):
+        if not isinstance(raw[name], bool):
+            raise ConfigError(f"training.{name} must be a boolean")
+
+    return TrainingConfig(
+        raw["max_length"], raw["per_device_train_batch_size"],
+        raw["per_device_eval_batch_size"], raw["gradient_accumulation_steps"],
+        learning_rate, candidates, weight_decay, warmup_ratio,
+        raw["lr_scheduler_type"], raw["max_epochs"], patience, threshold,
+        raw["metric_for_best_model"], seed, raw["bf16"],
+        raw["group_by_length"], raw["save_total_limit"],
+    )
