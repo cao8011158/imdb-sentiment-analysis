@@ -22,9 +22,9 @@ model:
 
 training:
   max_length: 2048
-  per_device_train_batch_size: 16
+  per_device_train_batch_size: 32
   per_device_eval_batch_size: 32
-  gradient_accumulation_steps: 2
+  gradient_accumulation_steps: 1
   learning_rate: 2.0e-5
   learning_rate_candidates:
     - 1.0e-5
